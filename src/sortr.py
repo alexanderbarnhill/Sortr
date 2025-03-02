@@ -108,10 +108,19 @@ class SortrGUI:
                 image_window.destroy()
 
         def resize_image(event):
-            # Scale the image to fit the window size while keeping the aspect ratio
-            new_size = (event.width, event.height)
+            # Scale the image to fit the window size without rotating vertical images
             resized_img = img.copy()
-            resized_img.thumbnail(new_size, Image.Resampling.LANCZOS)
+            img_width, img_height = resized_img.size
+            screen_width = event.width
+            screen_height = event.height
+
+            # Maintain aspect ratio without rotating vertical images
+            if img_width > img_height:
+                resized_img.thumbnail((screen_width, screen_height), Image.Resampling.LANCZOS)
+            else:
+                resized_img.thumbnail((min(screen_width, img_width), min(screen_height, img_height)),
+                                      Image.Resampling.LANCZOS)
+
             img_tk = ImageTk.PhotoImage(resized_img)
             label.config(image=img_tk)
             label.image = img_tk

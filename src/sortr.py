@@ -102,7 +102,9 @@ class SortrGUI:
         self.settings_button = tk.Button(root, text="Filter Blurry", command=self.filter_blurry)
         self.settings_button.pack(pady=5)
 
-
+        self.yes_dir = "YES"
+        self.no_dir = "NO"
+        self.maybe_dir = "MAYBE"
 
         # Redirect log to the GUI
         self.setup_logging()
@@ -145,7 +147,9 @@ class SortrGUI:
         for image in images:
             if blurry_directory in image:
                 continue
-
+            if args.include_processed is True:
+                # TODO
+                pass
             kept.append(image)
         return kept
 
@@ -319,7 +323,7 @@ class SortrGUI:
     def handle_user_selection(self, f, choice, args):
         output_directory = self.get_output(args)
 
-        out = "Yes" if choice == "y" else "No" if choice == "n" else "Maybe"
+        out = self.yes_dir if choice == "y" else self.no_dir if choice == "n" else self.maybe_dir
         out_folder = os.path.join(output_directory, out)
         os.makedirs(out_folder, exist_ok=True)
 

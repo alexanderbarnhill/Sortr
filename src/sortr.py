@@ -4,13 +4,12 @@ from PIL import Image, ImageTk, ImageFilter
 import logging
 from datetime import datetime
 import tkinter as tk
-import numpy as np
 import os
 from argparse import Namespace
 from tkinter import scrolledtext, messagebox, Toplevel, Label, Entry, Button
-import pandas as pd
-
+import json
 import threading
+import sys
 
 log_filename = f"finwave_pipeline_image_extraction_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 
@@ -42,22 +41,40 @@ def open_file(f):
     return img
 
 
-def get_sharpness(image_path):
-    # Open the image
-    img = Image.open(image_path)
+def get_sharpness(path) -> float:
+    image = open_file(path)
+    # Convert image to grayscale
+    grayscale_image = image.convert('L')
 
-    # Convert to grayscale
-    gray_img = img.convert('L')
+    # Apply the Laplacian filter
+    laplacian_image = grayscale_image.filter(ImageFilter.FIND_EDGES)
 
-    # Apply a Laplacian filter to detect edges
-    laplacian = gray_img.filter(ImageFilter.FIND_EDGES)
+    # Calculate the sharpness by computing the variance of the Laplacian image
+    laplacian_pixels = list(laplacian_image.getdata())
+    variance = calculate_variance(laplacian_pixels)
 
-    # Convert the filtered image to a numpy array
-    laplacian_array = np.array(laplacian)
+    return variance
 
-    # Calculate the variance of the Laplacian
-    variance = laplacian_array.var()
+def calculate_gradient_sharpness(path: str) -> float:
+    image = open_file(path)
+    # Convert image to grayscale
+    grayscale_image = image.convert('L')
 
+    # Apply Sobel filters (approximation for gradient calculation)
+    sobel_x = grayscale_image.filter(ImageFilter.FIND_EDGES)
+    sobel_y = grayscale_image.filter(ImageFilter.FIND_EDGES)
+
+    # Calculate the gradient magnitude (simple approximation)
+    gradient_pixels = [(px1 + px2) / 2 for px1, px2 in zip(sobel_x.getdata(), sobel_y.getdata())]
+
+    # Calculate the sharpness by computing the variance of the gradient image
+    variance = calculate_variance(gradient_pixels)
+
+    return variance
+
+def calculate_variance(pixels: list) -> float:
+    mean = sum(pixels) / len(pixels)
+    variance = sum((x - mean) ** 2 for x in pixels) / len(pixels)
     return variance
 
 
@@ -85,6 +102,19 @@ settings = {
     "sharpness_threshold": 500
 }
 
+class TkinterLoggingHandler(logging.Handler):
+    def __init__(self, text_widget):
+        super().__init__()
+        self.text_widget = text_widget
+
+    def emit(self, record):
+        log_entry = self.format(record)
+        self.text_widget.config(state=tk.NORMAL)  # Make the widget editable temporarily
+        self.text_widget.insert(tk.END, log_entry + '\n')
+        self.text_widget.yview(tk.END)  # Scroll to the end of the text widget
+        self.text_widget.config(state=tk.DISABLED)  # Make the widget read-only again
+
+
 class SortrGUI:
     def __init__(self, root):
         self.root = root
@@ -93,6 +123,9 @@ class SortrGUI:
 
         self.log_display = scrolledtext.ScrolledText(root, state='disabled', height=15)
         self.log_display.pack(pady=10, padx=10, fill=tk.BOTH, expand=True)
+
+        self.log_handler = TkinterLoggingHandler(self.log_display)
+        logger.addHandler(self.log_handler)
 
         self.is_running = False  # To track if pipeline is running
         self.thread = None  # To hold the pipeline thread
@@ -126,17 +159,17 @@ class SortrGUI:
         images = get_images(args.input_directory)
         output_directory = args.input_directory
         logger.info(f"Found {len(images)} images")
-        file_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_image_statistics.csv"
-        data = {
-            "File": [],
-            "Sharpness": [],
-
-        }
+        file_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_image_statistics.json"
+        data = []
         for idx, path in list(enumerate(images)):
-            data["File"].append(path)
-            data["Sharpness"].append(get_sharpness(path))
-        df = pd.DataFrame(data)
-        df.to_csv(os.path.join(output_directory, file_name), index=False)
+            logger.info(f"Processing {path}")
+            sys.stdout.flush()
+            data.append({
+                "File": path,
+                "Sharpness": get_sharpness(path)
+            })
+        with open(os.path.join(output_directory, file_name), "w") as f:
+            json.dump(data, f)
 
     def filter_blurry(self):
         args = Namespace(**settings)
@@ -171,9 +204,9 @@ class SortrGUI:
         for image in images:
             if blurry_directory in image:
                 continue
-            if args.include_processed is True:
-                # TODO
-                pass
+            # if args.include_processed is True:
+            #     # TODO
+            #     pass
             kept.append(image)
         return kept
 

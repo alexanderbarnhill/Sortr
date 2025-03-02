@@ -5,6 +5,8 @@ import logging
 from datetime import datetime
 import tkinter as tk
 from io import BytesIO
+import cv2
+import numpy as np
 import os
 from argparse import Namespace
 from tkinter import scrolledtext, messagebox, Toplevel, Label, Entry, Button
@@ -24,7 +26,6 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-
 def get_images(directory):
     extension_list = ['jpg', 'jpeg', 'JPG', 'JPEG', 'png', 'PNG']
     images = []
@@ -33,14 +34,27 @@ def get_images(directory):
     images = sorted(list(set(images)))
     return images
 
-
 def move(f, t):
     shutil.move(f, t)
-
 
 def open_file(f):
     img = Image.open(f)
     return img
+
+def get_sharpness(image_path):
+    # Read the image
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+
+    if img is None:
+        raise ValueError(f"Unable to read the image at {image_path}")
+
+    # Apply Laplacian operator to the image
+    laplacian = cv2.Laplacian(img, cv2.CV_64F)
+
+    # Compute the variance of the Laplacian
+    sharpness = laplacian.var()
+
+    return sharpness
 
 
 def correct_image_orientation(img):
@@ -64,6 +78,7 @@ def correct_image_orientation(img):
 settings = {
     "input_directory": "",
     "output_directory": "",
+    "sharpness_threshold": 200
 }
 
 class SortrGUI:
@@ -78,14 +93,38 @@ class SortrGUI:
         self.is_running = False  # To track if pipeline is running
         self.thread = None  # To hold the pipeline thread
 
-        self.start_button = tk.Button(root, text="Start", command=self.toggle_pipeline)
-        self.start_button.pack(pady=5)
-
         self.settings_button = tk.Button(root, text="Settings", command=self.open_settings)
         self.settings_button.pack(pady=5)
 
+        self.start_button = tk.Button(root, text="Start", command=self.toggle_pipeline)
+        self.start_button.pack(pady=5)
+
+        self.settings_button = tk.Button(root, text="Filter Blurry", command=self.filter_blurry)
+        self.settings_button.pack(pady=5)
+
+
+
         # Redirect log to the GUI
         self.setup_logging()
+
+    def get_blurry_directory(self, args):
+        blurry_directory = self.get_output(args)
+        blurry_directory = os.path.join(blurry_directory, ".too_blurry")
+        return blurry_directory
+
+    def filter_blurry(self):
+        args = Namespace(**settings)
+        images = get_images(args.input_directory)
+        logger.info(f"Found {len(images)} images")
+        blurry_directory = self.get_blurry_directory(args)
+        os.makedirs(blurry_directory, exist_ok=True)
+        for idx, path in list(enumerate(images)):
+            sharpness = get_sharpness(path)
+            logger.info(f"Path: {path}, Sharpness: {sharpness}")
+            if sharpness < args.sharpness_threshold:
+                logger.info(f"{path} is under sharpness threshold of {args.sharpness_threshold}. Moving to {blurry_directory}")
+                shutil.move(path, blurry_directory)
+
 
     def toggle_pipeline(self):
         if not self.is_running:
@@ -100,11 +139,23 @@ class SortrGUI:
             self.start_button.config(text="Start Pipeline")  # Change button text back to Start
             # Optionally, signal the pipeline thread to stop here if needed
 
+    def filter_images(self, images, args):
+        kept = []
+        blurry_directory = self.get_blurry_directory(args)
+        for image in images:
+            if blurry_directory in image:
+                continue
+
+            kept.append(image)
+        return kept
+
+
     def start_pipeline(self):
         logger.info(f"Starting pipeline with settings: {settings}")
         logger.info("Step 1: Data loading...")
         args = Namespace(**settings)
         images = get_images(args.input_directory)
+        images = self.filter_images(images, args)
         logger.info(f"Found {len(images)} images")
         for idx, path in list(enumerate(images)):
             if not self.is_running:
@@ -113,12 +164,17 @@ class SortrGUI:
             logger.info(f"[{idx + 1} \t / \t {len(images)}] Processing {path}")
             self.process_image(path, args)
 
+    import tkinter as tk
+    from PIL import Image, ImageTk
+
     def process_image(self, path, args):
         img = open_file(path)
         img = correct_image_orientation(img)  # Correct orientation here
 
         valid_keys = {'y', 'm', 'n'}
         user_input = None
+        zoom_level = 1.0
+        pan_x, pan_y = 0, 0
 
         def on_key(event):
             nonlocal user_input
@@ -127,20 +183,45 @@ class SortrGUI:
                 image_window.destroy()
 
         def resize_image():
+            nonlocal img
             resized_img = img.copy()
-            img_width, img_height = resized_img.size
-            screen_width = image_window.winfo_width()  # Get current window width
-            screen_height = image_window.winfo_height()  # Get current window height
 
-            if img_width > img_height:
-                resized_img.thumbnail((screen_width, screen_height), Image.Resampling.LANCZOS)
-            else:
-                resized_img.thumbnail((min(screen_width, img_width), min(screen_height, img_height)),
-                                      Image.Resampling.LANCZOS)
+            # Adjust zoom and pan
+            width, height = resized_img.size
+            zoomed_width = int(width * zoom_level)
+            zoomed_height = int(height * zoom_level)
+            resized_img = resized_img.resize((zoomed_width, zoomed_height), Image.Resampling.LANCZOS)
+
+            # Apply pan offset
+            image_x = pan_x * zoom_level
+            image_y = pan_y * zoom_level
+
+            # Adjusting the image to the pan
+            resized_img = resized_img.crop((image_x, image_y, image_x + zoomed_width, image_y + zoomed_height))
 
             img_tk = ImageTk.PhotoImage(resized_img)
             label.config(image=img_tk)
             label.image = img_tk
+
+        def on_mouse_wheel(event):
+            logger.info("Mouse wheel detected")
+            nonlocal zoom_level
+            zoom_factor = 1.1
+
+            # For Windows and Linux, event.delta might return different values. Adjust accordingly
+            if event.delta > 0 or event.num == 5:  # Scroll up (zoom in)
+                zoom_level /= zoom_factor
+            elif event.delta < 0 or event.num == 4:  # Scroll down (zoom out)
+                zoom_level *= zoom_factor
+
+            resize_image()
+
+        def on_mouse_drag(event):
+            nonlocal pan_x, pan_y
+            if event.state == 1:  # Left button pressed
+                pan_x += event.x - pan_x
+                pan_y += event.y - pan_y
+                resize_image()
 
         def undo_action():
             logger.info("Undoing last action")
@@ -176,6 +257,12 @@ class SortrGUI:
         button_frame = tk.Frame(image_window)
         button_frame.pack(side=tk.TOP, fill=tk.X)
 
+        # Create a Text widget for displaying the file name that is selectable
+        file_name_text = tk.Text(button_frame, height=1, width=50, wrap=tk.WORD, font=("Arial", 14))
+        file_name_text.insert(tk.END, path.split("/")[-1])  # Insert the file name
+        file_name_text.config(state=tk.DISABLED)  # Make the text read-only (selectable, but not editable)
+        file_name_text.pack(side=tk.TOP, pady=10)
+
         exit_button = tk.Button(button_frame, text="Exit", command=exit_processing)
         exit_button.pack(side=tk.LEFT, padx=10)
 
@@ -207,6 +294,9 @@ class SortrGUI:
         instruction.pack(pady=10)
 
         image_window.bind('<Key>', on_key)
+        image_window.bind_all('<MouseWheel>', on_mouse_wheel)  # Ensures it works even if the window isn't focused
+        image_window.bind_all('<Button-4>', on_mouse_wheel)  # Linux systems sometimes use this event
+        image_window.bind_all('<Button-5>', on_mouse_wheel)  #
         image_window.focus_force()
 
         while user_input not in valid_keys and self.is_running:
@@ -222,14 +312,19 @@ class SortrGUI:
         logger.info(f"Image processing complete for {path}")
         self.handle_user_selection(path, user_input, args)
 
-    def handle_user_selection(self, f, choice, args):
+    def get_output(self, args):
         output_directory = args.output_directory if args.output_directory else args.input_directory
+        return output_directory
+
+    def handle_user_selection(self, f, choice, args):
+        output_directory = self.get_output(args)
 
         out = "Yes" if choice == "y" else "No" if choice == "n" else "Maybe"
         out_folder = os.path.join(output_directory, out)
         os.makedirs(out_folder, exist_ok=True)
 
         move(f, out_folder)
+
     def setup_logging(self):
         class TextHandler(logging.Handler):
             def __init__(self, widget):

@@ -16,9 +16,9 @@ jobs:
         python-version: 3.8
 
     - run: pip install -r src/requirements.txt
-    - run: pyinstaller src/finwave_pipeline.py
+    - run: pyinstaller src/sortr.py
     # Optionally verify that it works (provided that it does not need user interaction)
     - uses: actions/upload-artifact@v4
       with:
-        name: "finwave_pipeline_${{matrix.os}}"
+        name: "sortr_${{matrix.os}}"
         path: dist/*

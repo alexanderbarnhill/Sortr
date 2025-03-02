@@ -43,6 +43,24 @@ def open_file(f):
     return img
 
 
+def correct_image_orientation(img):
+    try:
+        exif = img._getexif()
+        if exif is not None:
+            orientation_tag = 274  # EXIF orientation tag
+            orientation = exif.get(orientation_tag, None)
+            logger.info(f"Orientation: {orientation}")
+            if orientation == 3:
+                img = img.rotate(180, expand=True)
+            elif orientation == 6:
+                img = img.rotate(270, expand=True)
+            elif orientation == 8:
+                img = img.rotate(90, expand=True)
+    except (AttributeError, KeyError, IndexError) as e:
+        logger.info(f"Could not get orientation: {e}")
+        pass  # EXIF data not available or not usable
+    return img
+
 settings = {
     "input_directory": "",
     "output_directory": "",
@@ -95,8 +113,11 @@ class SortrGUI:
             logger.info(f"[{idx + 1} \t / \t {len(images)}] Processing {path}")
             self.process_image(path, args)
 
+
+
     def process_image(self, path, args):
         img = open_file(path)
+        img = correct_image_orientation(img)
 
         valid_keys = {'y', 'm', 'n'}
         user_input = None

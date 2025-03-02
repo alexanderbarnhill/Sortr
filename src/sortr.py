@@ -72,10 +72,20 @@ def calculate_gradient_sharpness(path: str) -> float:
 
     return variance
 
+
 def calculate_variance(pixels: list) -> float:
-    mean = sum(pixels) / len(pixels)
-    variance = sum((x - mean) ** 2 for x in pixels) / len(pixels)
-    return variance
+    n = len(pixels)
+    mean = 0
+    sum_of_squares = 0
+
+    for x in pixels:
+        mean += x
+    mean /= n
+
+    for x in pixels:
+        sum_of_squares += (x - mean) ** 2
+
+    return sum_of_squares / n
 
 
 def correct_image_orientation(img):

@@ -113,11 +113,9 @@ class SortrGUI:
             logger.info(f"[{idx + 1} \t / \t {len(images)}] Processing {path}")
             self.process_image(path, args)
 
-
-
     def process_image(self, path, args):
         img = open_file(path)
-        img = correct_image_orientation(img)
+        img = correct_image_orientation(img)  # Correct orientation here
 
         valid_keys = {'y', 'm', 'n'}
         user_input = None
@@ -128,18 +126,15 @@ class SortrGUI:
                 user_input = event.char
                 image_window.destroy()
 
-        def resize_image(event):
-            # Scale the image to fit the window size without rotating vertical images
+        def resize_image():
             resized_img = img.copy()
             img_width, img_height = resized_img.size
-            screen_width = event.width
-            screen_height = event.height
+            screen_width = image_window.winfo_width()  # Get current window width
+            screen_height = image_window.winfo_height()  # Get current window height
 
-            # If the image is portrait (height > width), scale it to fit vertically
             if img_width > img_height:
                 resized_img.thumbnail((screen_width, screen_height), Image.Resampling.LANCZOS)
             else:
-                # For portrait images, preserve the height and adjust the width proportionally
                 resized_img.thumbnail((min(screen_width, img_width), min(screen_height, img_height)),
                                       Image.Resampling.LANCZOS)
 
@@ -161,28 +156,41 @@ class SortrGUI:
             self.is_running = False
             image_window.destroy()
 
+        def rotate_image():
+            nonlocal img  # Access the original image
+            img = img.rotate(90, expand=True)  # Rotate the image by 90 degrees
+            resize_image()  # Resize the image to fit the window after rotation
+
+        def anti_rotate_image():
+            nonlocal img
+            img = img.rotate(-90, expand=True)
+            resize_image()
+
         # Convert image for Tkinter
         img = img.convert("RGB")
 
-        # Create a new full-screen window with the image and key bindings
         image_window = tk.Toplevel(self.root)
         image_window.title("Image Review")
         image_window.attributes('-fullscreen', True)
 
-        # Button row at the top of the image frame
         button_frame = tk.Frame(image_window)
         button_frame.pack(side=tk.TOP, fill=tk.X)
 
         exit_button = tk.Button(button_frame, text="Exit", command=exit_processing)
         exit_button.pack(side=tk.LEFT, padx=10)
 
-        # Initial display of the image without rotating vertical images
+        anti_rotate_button = tk.Button(button_frame, text="Rotate 90° Counter Clockwise", command=anti_rotate_image)
+        anti_rotate_button.pack(side=tk.LEFT, padx=10)
+
+        rotate_button = tk.Button(button_frame, text="Rotate 90° Clockwise", command=rotate_image)
+        rotate_button.pack(side=tk.LEFT, padx=10)
+
+        # Initial display of the image
         resized_img = img.copy()
         img_width, img_height = resized_img.size
         screen_width = image_window.winfo_screenwidth()
         screen_height = image_window.winfo_screenheight()
 
-        # Adjust scaling based on the orientation of the image (portrait or landscape)
         if img_width > img_height:
             resized_img.thumbnail((screen_width, screen_height), Image.Resampling.LANCZOS)
         else:
@@ -199,10 +207,8 @@ class SortrGUI:
         instruction.pack(pady=10)
 
         image_window.bind('<Key>', on_key)
-        image_window.bind('<Configure>', resize_image)
         image_window.focus_force()
 
-        # Wait for user input
         while user_input not in valid_keys and self.is_running:
             self.root.update()
 

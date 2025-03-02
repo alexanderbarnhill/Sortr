@@ -52,7 +52,7 @@ class SortrGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Sortr")
-        self.root.geometry("800x800")
+        self.root.geometry("400x400")
 
         self.log_display = scrolledtext.ScrolledText(root, state='disabled', height=15)
         self.log_display.pack(pady=10, padx=10, fill=tk.BOTH, expand=True)
@@ -125,6 +125,20 @@ class SortrGUI:
             label.config(image=img_tk)
             label.image = img_tk
 
+        def undo_action():
+            logger.info("Undoing last action")
+
+        def previous_image():
+            logger.info("Going back to previous image")
+
+        def next_image():
+            logger.info("Skipping to next image")
+
+        def exit_processing():
+            logger.info("Exiting image processing")
+            self.is_running = False
+            image_window.destroy()
+
         # Convert image for Tkinter
         img = img.convert("RGB")
 
@@ -133,11 +147,34 @@ class SortrGUI:
         image_window.title("Image Review")
         image_window.attributes('-fullscreen', True)
 
-        # Initial display of the image
+        # Button row at the top of the image frame
+        button_frame = tk.Frame(image_window)
+        button_frame.pack(side=tk.TOP, fill=tk.X)
+
+        # undo_button = tk.Button(button_frame, text="Undo", command=undo_action)
+        # undo_button.pack(side=tk.LEFT, padx=10)
+        #
+        # previous_button = tk.Button(button_frame, text="Previous", command=previous_image)
+        # previous_button.pack(side=tk.LEFT, padx=10)
+        #
+        # next_button = tk.Button(button_frame, text="Next", command=next_image)
+        # next_button.pack(side=tk.LEFT, padx=10)
+
+        exit_button = tk.Button(button_frame, text="Exit", command=exit_processing)
+        exit_button.pack(side=tk.LEFT, padx=10)
+
+        # Initial display of the image without rotating vertical images
         resized_img = img.copy()
+        img_width, img_height = resized_img.size
         screen_width = image_window.winfo_screenwidth()
         screen_height = image_window.winfo_screenheight()
-        resized_img.thumbnail((screen_width, screen_height), Image.Resampling.LANCZOS)
+
+        if img_width > img_height:
+            resized_img.thumbnail((screen_width, screen_height), Image.Resampling.LANCZOS)
+        else:
+            resized_img.thumbnail((min(screen_width, img_width), min(screen_height, img_height)),
+                                  Image.Resampling.LANCZOS)
+
         img_tk = ImageTk.PhotoImage(resized_img)
 
         label = tk.Label(image_window, image=img_tk)
@@ -152,9 +189,8 @@ class SortrGUI:
         image_window.focus_force()
 
         # Wait for user input
-        while user_input not in valid_keys:
+        while user_input not in valid_keys and self.is_running:
             self.root.update()
-
 
         if user_input == 'y':
             logger.info(f"User confirmed 'yes' for {path}")
@@ -164,8 +200,6 @@ class SortrGUI:
             logger.info(f"User rejected 'no' for {path}")
 
         logger.info(f"Image processing complete for {path}")
-        self.handle_user_selection(path, user_input, args)
-
 
     def handle_user_selection(self, f, choice, args):
         output_directory = args.output_directory if args.output_directory else args.input_directory

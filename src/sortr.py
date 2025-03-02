@@ -82,7 +82,7 @@ def correct_image_orientation(img):
 settings = {
     "input_directory": "",
     "output_directory": "",
-    "sharpness_threshold": 200
+    "sharpness_threshold": 500
 }
 
 class SortrGUI:

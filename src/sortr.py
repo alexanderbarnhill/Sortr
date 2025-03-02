@@ -114,10 +114,11 @@ class SortrGUI:
             screen_width = event.width
             screen_height = event.height
 
-            # Maintain aspect ratio without rotating vertical images
+            # If the image is portrait (height > width), scale it to fit vertically
             if img_width > img_height:
                 resized_img.thumbnail((screen_width, screen_height), Image.Resampling.LANCZOS)
             else:
+                # For portrait images, preserve the height and adjust the width proportionally
                 resized_img.thumbnail((min(screen_width, img_width), min(screen_height, img_height)),
                                       Image.Resampling.LANCZOS)
 
@@ -151,15 +152,6 @@ class SortrGUI:
         button_frame = tk.Frame(image_window)
         button_frame.pack(side=tk.TOP, fill=tk.X)
 
-        # undo_button = tk.Button(button_frame, text="Undo", command=undo_action)
-        # undo_button.pack(side=tk.LEFT, padx=10)
-        #
-        # previous_button = tk.Button(button_frame, text="Previous", command=previous_image)
-        # previous_button.pack(side=tk.LEFT, padx=10)
-        #
-        # next_button = tk.Button(button_frame, text="Next", command=next_image)
-        # next_button.pack(side=tk.LEFT, padx=10)
-
         exit_button = tk.Button(button_frame, text="Exit", command=exit_processing)
         exit_button.pack(side=tk.LEFT, padx=10)
 
@@ -169,6 +161,7 @@ class SortrGUI:
         screen_width = image_window.winfo_screenwidth()
         screen_height = image_window.winfo_screenheight()
 
+        # Adjust scaling based on the orientation of the image (portrait or landscape)
         if img_width > img_height:
             resized_img.thumbnail((screen_width, screen_height), Image.Resampling.LANCZOS)
         else:
@@ -200,6 +193,7 @@ class SortrGUI:
             logger.info(f"User rejected 'no' for {path}")
 
         logger.info(f"Image processing complete for {path}")
+        self.handle_user_selection(path, user_input, args)
 
     def handle_user_selection(self, f, choice, args):
         output_directory = args.output_directory if args.output_directory else args.input_directory

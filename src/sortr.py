@@ -1,15 +1,15 @@
 from glob import glob
 import shutil
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageFilter
 import logging
 from datetime import datetime
 import tkinter as tk
-from io import BytesIO
-import cv2
 import numpy as np
 import os
 from argparse import Namespace
 from tkinter import scrolledtext, messagebox, Toplevel, Label, Entry, Button
+import pandas as pd
+
 import threading
 
 log_filename = f"finwave_pipeline_image_extraction_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
@@ -41,20 +41,24 @@ def open_file(f):
     img = Image.open(f)
     return img
 
+
 def get_sharpness(image_path):
-    # Read the image
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    # Open the image
+    img = Image.open(image_path)
 
-    if img is None:
-        raise ValueError(f"Unable to read the image at {image_path}")
+    # Convert to grayscale
+    gray_img = img.convert('L')
 
-    # Apply Laplacian operator to the image
-    laplacian = cv2.Laplacian(img, cv2.CV_64F)
+    # Apply a Laplacian filter to detect edges
+    laplacian = gray_img.filter(ImageFilter.FIND_EDGES)
 
-    # Compute the variance of the Laplacian
-    sharpness = laplacian.var()
+    # Convert the filtered image to a numpy array
+    laplacian_array = np.array(laplacian)
 
-    return sharpness
+    # Calculate the variance of the Laplacian
+    variance = laplacian_array.var()
+
+    return variance
 
 
 def correct_image_orientation(img):
@@ -85,7 +89,7 @@ class SortrGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Sortr")
-        self.root.geometry("400x400")
+        self.root.geometry("400x600")
 
         self.log_display = scrolledtext.ScrolledText(root, state='disabled', height=15)
         self.log_display.pack(pady=10, padx=10, fill=tk.BOTH, expand=True)
@@ -102,6 +106,9 @@ class SortrGUI:
         self.settings_button = tk.Button(root, text="Filter Blurry", command=self.filter_blurry)
         self.settings_button.pack(pady=5)
 
+        self.settings_button = tk.Button(root, text="Generate Photo Statistics", command=self.generate_stats)
+        self.settings_button.pack(pady=5)
+
         self.yes_dir = "YES"
         self.no_dir = "NO"
         self.maybe_dir = "MAYBE"
@@ -113,6 +120,23 @@ class SortrGUI:
         blurry_directory = self.get_output(args)
         blurry_directory = os.path.join(blurry_directory, ".too_blurry")
         return blurry_directory
+
+    def generate_stats(self):
+        args = Namespace(**settings)
+        images = get_images(args.input_directory)
+        output_directory = args.input_directory
+        logger.info(f"Found {len(images)} images")
+        file_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_image_statistics.csv"
+        data = {
+            "File": [],
+            "Sharpness": [],
+
+        }
+        for idx, path in list(enumerate(images)):
+            data["File"].append(path)
+            data["Sharpness"].append(get_sharpness(path))
+        df = pd.DataFrame(data)
+        df.to_csv(os.path.join(output_directory, file_name), index=False)
 
     def filter_blurry(self):
         args = Namespace(**settings)

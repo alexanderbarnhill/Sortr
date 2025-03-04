@@ -1,5 +1,7 @@
 from glob import glob
 import shutil
+from typing import List
+
 from PIL import Image, ImageTk, ImageFilter
 import logging
 from datetime import datetime
@@ -10,6 +12,7 @@ from tkinter import scrolledtext, messagebox, Toplevel, Label, Entry, Button
 import json
 import threading
 import sys
+from enum import Enum
 
 log_filename = f"finwave_pipeline_image_extraction_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 
@@ -18,7 +21,6 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(log_filename),
         logging.StreamHandler()
     ]
 )
@@ -39,6 +41,12 @@ def move(f, t):
 def open_file(f):
     img = Image.open(f)
     return img
+
+def get_path_diff(path1, path2):
+    replaced = path2.replace(path1, "")
+    if len(replaced) > 0 and replaced[0] == os.sep:
+        replaced = replaced[1:]
+    return replaced
 
 
 def get_sharpness(path) -> float:
@@ -106,11 +114,38 @@ def correct_image_orientation(img):
         pass  # EXIF data not available or not usable
     return img
 
+
 settings = {
-    "input_directory": "",
-    "output_directory": "",
+    "input_directory": "/home/alex/data/04_FIN-PRINT-v2/demo_JTowers/SRC",
+    "output_directory": "/home/alex/data/04_FIN-PRINT-v2/demo_JTowers/OUT",
     "sharpness_threshold": 500
 }
+
+
+class MoveActionType(Enum):
+    FILTER = 1
+    SELECT = 2
+
+
+class ProcessResult(Enum):
+    OK = 1
+    UNDO = 2
+    PREVIOUS = 3
+    NEXT = 4
+
+
+class MoveAction:
+    def __init__(self, from_path, to_path, action_type: MoveActionType):
+        self.from_path = from_path
+        self.to_path = to_path
+        self.action_type = action_type
+
+    def undo(self):
+        if os.path.exists(self.from_path):
+            return
+        logger.info(f"[{self.action_type}] Moving back to {self.from_path} from {self.to_path}")
+        shutil.move(self.to_path, self.from_path)
+
 
 class TkinterLoggingHandler(logging.Handler):
     def __init__(self, text_widget):
@@ -146,11 +181,16 @@ class SortrGUI:
         self.start_button = tk.Button(root, text="Start", command=self.toggle_pipeline)
         self.start_button.pack(pady=5)
 
-        self.settings_button = tk.Button(root, text="Filter Blurry", command=self.filter_blurry)
-        self.settings_button.pack(pady=5)
+        self.filter_button = tk.Button(root, text="Filter Blurry", command=self.toggle_filter_blurry)
+        self.filter_button.pack(pady=5)
 
-        self.settings_button = tk.Button(root, text="Generate Photo Statistics", command=self.generate_stats)
-        self.settings_button.pack(pady=5)
+        self.stats_button = tk.Button(root, text="Generate Photo Statistics", command=self.toggle_stats_generation)
+        self.stats_button.pack(pady=5)
+
+        self.undo_filter_button = None
+
+        self.filter_history: List[MoveAction] = []
+        self.select_history: List[MoveAction] = []
 
         self.yes_dir = "YES"
         self.no_dir = "NO"
@@ -159,10 +199,57 @@ class SortrGUI:
         # Redirect log to the GUI
         self.setup_logging()
 
-    def get_blurry_directory(self, args):
-        blurry_directory = self.get_output(args)
-        blurry_directory = os.path.join(blurry_directory, ".too_blurry")
+
+    def undo_last(self, action_type: MoveActionType):
+        if action_type == MoveActionType.FILTER:
+            history = self.filter_history
+        else:
+            history = self.select_history
+        if len(history) == 0:
+            return
+
+        last = history.pop()
+        last.undo()
+
+    def undo_all(self, action_type: MoveActionType):
+        if action_type == MoveActionType.FILTER:
+            history = self.filter_history
+        else:
+            history = self.select_history
+        if len(history) == 0:
+            return
+
+        for action in history[::-1]:
+            if not self.is_running:
+                self.start_button.config(text="Start")
+                return
+            action.undo()
+        self.start_button.config(text="Start")
+
+    def get_blurry_directory(self, args, source_file):
+        blurry_directory = self.get_output(args, source_file, ".too_blurry")
         return blurry_directory
+
+    def toggle_stats_generation(self):
+        if not self.is_running:
+            logger.info("Starting statistics generation")
+            self.is_running = True
+            self.start_button.config(text="Stop")  # Change button text to Stop
+            self.thread = threading.Thread(target=self.generate_stats)
+            self.thread.start()
+
+        else:
+            self.is_running = False
+
+    def toggle_filter_blurry(self):
+        if not self.is_running:
+            logger.info("Starting to filter blurry images")
+            self.is_running = True
+            self.start_button.config(text="Stop")  # Change button text to Stop
+            self.thread = threading.Thread(target=self.filter_blurry)
+            self.thread.start()
+        else:
+            self.is_running = False
 
     def generate_stats(self):
         args = Namespace(**settings)
@@ -172,6 +259,8 @@ class SortrGUI:
         file_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_image_statistics.json"
         data = []
         for idx, path in list(enumerate(images)):
+            if not self.is_running:
+                return
             logger.info(f"Processing {path}")
             sys.stdout.flush()
             data.append({
@@ -181,19 +270,46 @@ class SortrGUI:
         with open(os.path.join(output_directory, file_name), "w") as f:
             json.dump(data, f)
 
+        logger.info(f"Finished processing {len(images)} images. Statistics file located at {os.path.join(output_directory, file_name)}")
+
+    def toggle_undo_filter(self):
+        if not self.is_running:
+            logger.info("Undoing filtering opterations...")
+            self.is_running = True
+            self.start_button.config(text="Stop")  # Change button text to Stop
+            self.thread = threading.Thread(target=self.undo_all, args=[MoveActionType.FILTER])
+            self.thread.start()
+
+        else:
+            self.is_running = False
+
+    def add_undo_filter_button(self):
+        self.undo_filter_button = tk.Button(root, text="Undo filtering", command=self.toggle_undo_filter)
+        self.undo_filter_button.pack(pady=5)
+
     def filter_blurry(self):
         args = Namespace(**settings)
         images = get_images(args.input_directory)
         logger.info(f"Found {len(images)} images")
-        blurry_directory = self.get_blurry_directory(args)
-        os.makedirs(blurry_directory, exist_ok=True)
+
         for idx, path in list(enumerate(images)):
+            if not self.is_running:
+                logger.info("Stopping filtering.")
+                return
             sharpness = get_sharpness(path)
             logger.info(f"Path: {path}, Sharpness: {sharpness}")
             if sharpness < args.sharpness_threshold:
+                blurry_directory = self.get_blurry_directory(args, path)
+                os.makedirs(blurry_directory, exist_ok=True)
                 logger.info(f"{path} is under sharpness threshold of {args.sharpness_threshold}. Moving to {blurry_directory}")
+                self.history.append(
+                    MoveAction(path, os.path.join(blurry_directory, os.path.basename(path)), MoveActionType.FILTER)
+                )
                 shutil.move(path, blurry_directory)
+                if self.undo_filter_button is None:
+                    self.add_undo_filter_button()
 
+        logger.info(f"Finished processing images.")
 
     def toggle_pipeline(self):
         if not self.is_running:
@@ -210,7 +326,7 @@ class SortrGUI:
 
     def filter_images(self, images, args):
         kept = []
-        blurry_directory = self.get_blurry_directory(args)
+        blurry_directory = ".too_blurry"
         for image in images:
             if blurry_directory in image:
                 continue
@@ -228,12 +344,28 @@ class SortrGUI:
         images = get_images(args.input_directory)
         images = self.filter_images(images, args)
         logger.info(f"Found {len(images)} images")
-        for idx, path in list(enumerate(images)):
+        idx = 0
+        history = []
+        while idx < len(images):
             if not self.is_running:
                 logger.info("Pipeline stopped.")
                 break
-            logger.info(f"[{idx + 1} \t / \t {len(images)}] Processing {path}")
-            self.process_image(path, args)
+
+            path = images[idx]
+            logger.info(f"[{idx + 1} / {len(images)}] Processing {path}")
+            result = self.process_image(path, args)
+
+            if result == ProcessResult.UNDO:
+                # Undo the last image and go back in history
+                last_image, last_result = history.pop()  # Undo the last image
+                logger.info(f"Undoing image: {last_image}")
+                # Re-process the last image
+                images.insert(idx, last_image)  # Insert the undone image back into the list
+                idx -= 1  # Move back one step to re-process the image
+            else:
+                # Save current image and result into history
+                history.append((path, result))
+            idx += 1
 
     import tkinter as tk
     from PIL import Image, ImageTk
@@ -296,6 +428,11 @@ class SortrGUI:
 
         def undo_action():
             logger.info("Undoing last action")
+            self.undo_last(MoveActionType.SELECT)
+            nonlocal user_input
+            user_input = 'undo'  # Set user_input to 'undo' to exit the loop
+            image_window.destroy()
+
 
         def previous_image():
             logger.info("Going back to previous image")
@@ -343,6 +480,10 @@ class SortrGUI:
         rotate_button = tk.Button(button_frame, text="Rotate 90° Clockwise", command=rotate_image)
         rotate_button.pack(side=tk.LEFT, padx=10)
 
+        if len(self.select_history) > 0:
+            undo_button = tk.Button(button_frame, text="Undo", command=undo_action)
+            undo_button.pack(side=tk.LEFT, padx=10)
+
         # Initial display of the image
         resized_img = img.copy()
         img_width, img_height = resized_img.size
@@ -370,7 +511,7 @@ class SortrGUI:
         image_window.bind_all('<Button-5>', on_mouse_wheel)  #
         image_window.focus_force()
 
-        while user_input not in valid_keys and self.is_running:
+        while user_input not in valid_keys and user_input != "undo" and self.is_running:
             self.root.update()
 
         if user_input == 'y':
@@ -381,20 +522,26 @@ class SortrGUI:
             logger.info(f"User rejected 'no' for {path}")
 
         logger.info(f"Image processing complete for {path}")
+        if user_input == "undo":
+            return ProcessResult.UNDO
         self.handle_user_selection(path, user_input, args)
+        return ProcessResult.OK
 
-    def get_output(self, args):
+    def get_output(self, args, source_file, prefix=None):
         output_directory = args.output_directory if args.output_directory else args.input_directory
+        diff = get_path_diff(args.input_directory, os.path.dirname(source_file))
+        if prefix is not None:
+            output_directory = os.path.join(output_directory, prefix, diff)
+        else:
+            output_directory = os.path.join(output_directory, diff)
         return output_directory
 
     def handle_user_selection(self, f, choice, args):
-        output_directory = self.get_output(args)
-
         out = self.yes_dir if choice == "y" else self.no_dir if choice == "n" else self.maybe_dir
-        out_folder = os.path.join(output_directory, out)
-        os.makedirs(out_folder, exist_ok=True)
-
-        move(f, out_folder)
+        output_directory = self.get_output(args, f, prefix=out)
+        os.makedirs(output_directory, exist_ok=True)
+        self.select_history.append(MoveAction(f, os.path.join(output_directory, os.path.basename(f)), MoveActionType.SELECT))
+        move(f, output_directory)
 
     def setup_logging(self):
         class TextHandler(logging.Handler):
